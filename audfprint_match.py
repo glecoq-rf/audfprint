@@ -12,6 +12,7 @@ import time
 
 import psutil
 import numpy as np
+import pandas as pd
 import scipy.signal
 
 # Don't sweat failure to import graphics support.
@@ -29,7 +30,7 @@ import stft
 def process_info():
     rss = usrtime = 0
     p = psutil.Process(os.getpid())
-    if os.name == 'nt':
+    if os.name == "nt":
         rss = p.memory_info()[0]
         usrtime = p.cpu_times()[0]
     else:
@@ -39,20 +40,20 @@ def process_info():
 
 
 def log(message):
-    """ log info with stats """
-    print('%s physmem=%s utime=%s %s' % (time.ctime(), process_info()))
+    """log info with stats"""
+    print("%s physmem=%s utime=%s %s" % (time.ctime(), process_info()))
 
 
 def encpowerof2(val):
-    """ Return N s.t. 2^N >= val """
+    """Return N s.t. 2^N >= val"""
     return int(np.ceil(np.log(max(1, val)) / np.log(2)))
 
 
 def locmax(vec, indices=False):
-    """ Return a boolean vector of which points in vec are local maxima.
-        End points are peaks if larger than single neighbors.
-        if indices=True, return the indices of the True values instead
-        of the boolean vector. (originally from audfprint.py)
+    """Return a boolean vector of which points in vec are local maxima.
+    End points are peaks if larger than single neighbors.
+    if indices=True, return the indices of the True values instead
+    of the boolean vector. (originally from audfprint.py)
     """
     # x[-1]-1 means last value can be a peak
     # nbr = np.greater_equal(np.r_[x, x[-1]-1], np.r_[x[0], x])
@@ -60,7 +61,7 @@ def locmax(vec, indices=False):
     nbr = np.zeros(len(vec) + 1, dtype=bool)
     nbr[0] = True
     nbr[1:-1] = np.greater_equal(vec[1:], vec[:-1])
-    maxmask = (nbr[:-1] & ~nbr[1:])
+    maxmask = nbr[:-1] & ~nbr[1:]
     if indices:
         return np.nonzero(maxmask)[0]
     else:
@@ -68,7 +69,7 @@ def locmax(vec, indices=False):
 
 
 def keep_local_maxes(vec):
-    """ Zero out values unless they are local maxima."""
+    """Zero out values unless they are local maxima."""
     local_maxes = np.zeros(vec.shape)
     locmaxindices = locmax(vec, indices=True)
     local_maxes[locmaxindices] = vec[locmaxindices]
@@ -76,17 +77,17 @@ def keep_local_maxes(vec):
 
 
 def find_modes(data, threshold=5, window=0):
-    """ Find multiple modes in data,  Report a list of (mode, count)
-        pairs for every mode greater than or equal to threshold.
-        Only local maxima in counts are returned.
+    """Find multiple modes in data,  Report a list of (mode, count)
+    pairs for every mode greater than or equal to threshold.
+    Only local maxima in counts are returned.
     """
     # TODO: Ignores window at present
     datamin = np.amin(data)
     fullvector = np.bincount(data - datamin)
     # Find local maxima
-    localmaxes = np.nonzero(np.logical_and(locmax(fullvector),
-                                           np.greater_equal(fullvector,
-                                                            threshold)))[0]
+    localmaxes = np.nonzero(
+        np.logical_and(locmax(fullvector), np.greater_equal(fullvector, threshold))
+    )[0]
     return localmaxes + datamin, fullvector[localmaxes]
 
 
@@ -120,11 +121,13 @@ class Matcher(object):
         # If there are a lot of matches within a single track at different
         # alignments, stop looking after a while.
         self.max_alignments_per_id = 100
+        # export to csv
+        self.report_folder = None
 
     def _best_count_ids(self, hits, ht):
-        """ Return the indexes for the ids with the best counts.
-            hits is a matrix as returned by hash_table.get_hits()
-            with rows of consisting of [id dtime hash otime] """
+        """Return the indexes for the ids with the best counts.
+        hits is a matrix as returned by hash_table.get_hits()
+        with rows of consisting of [id dtime hash otime]"""
         allids = hits[:, 0]
         ids = np.unique(allids)
         # rawcounts = np.sum(np.equal.outer(ids, allids), axis=1)
@@ -139,17 +142,17 @@ class Matcher(object):
         bestcountsixs = np.argsort(wtdcounts)[::-1]
         # We will examine however many hits have rawcounts above threshold
         # up to a maximum of search_depth.
-        maxdepth = np.minimum(np.count_nonzero(np.greater(rawcounts,
-                                                          self.threshcount)),
-                              self.search_depth)
+        maxdepth = np.minimum(
+            np.count_nonzero(np.greater(rawcounts, self.threshcount)), self.search_depth
+        )
         # Return the ids to check
         bestcountsixs = bestcountsixs[:maxdepth]
         return ids[bestcountsixs], rawcounts[bestcountsixs]
 
     def _unique_match_hashes(self, id, hits, mode):
-        """ Return the list of unique matching hashes.  Split out so
-            we can recover the actual matching hashes for the best
-            match if required. """
+        """Return the list of unique matching hashes.  Split out so
+        we can recover the actual matching hashes for the best
+        match if required."""
         allids = hits[:, 0]
         alltimes = hits[:, 1]
         allhashes = hits[:, 2].astype(np.int64)
@@ -161,30 +164,33 @@ class Matcher(object):
         # matchhashes = sorted(list(set(matchhashes)))
         # much, much faster:
         matchix = np.nonzero(
-                np.logical_and(allids == id, np.less_equal(np.abs(alltimes - mode),
-                                                           self.window)))[0]
-        matchhasheshash = np.unique(allotimes[matchix]
-                                    + (allhashes[matchix] << timebits))
+            np.logical_and(
+                allids == id, np.less_equal(np.abs(alltimes - mode), self.window)
+            )
+        )[0]
+        matchhasheshash = np.unique(
+            allotimes[matchix] + (allhashes[matchix] << timebits)
+        )
         timemask = (1 << timebits) - 1
-        matchhashes = np.c_[matchhasheshash & timemask,
-                            matchhasheshash >> timebits]
+        matchhashes = np.c_[matchhasheshash & timemask, matchhasheshash >> timebits]
         return matchhashes
 
     def _calculate_time_ranges(self, hits, id, mode):
         """Given the id and mode, return the actual time support.
-           hits is an np.array of id, skew_time, hash, orig_time
-           which must be sorted in orig_time order."""
+        hits is an np.array of id, skew_time, hash, orig_time
+        which must be sorted in orig_time order."""
         minoffset = mode - self.window
         maxoffset = mode + self.window
         # match_times = sorted(hits[row, 3]
         #                     for row in np.nonzero(hits[:, 0]==id)[0]
         #                     if mode - self.window <= hits[row, 1]
         #                     and hits[row, 1] <= mode + self.window)
-        match_times = hits[np.logical_and.reduce([
-            hits[:, 1] >= minoffset,
-            hits[:, 1] <= maxoffset,
-            hits[:, 0] == id
-        ]), 3]
+        match_times = hits[
+            np.logical_and.reduce(
+                [hits[:, 1] >= minoffset, hits[:, 1] <= maxoffset, hits[:, 0] == id]
+            ),
+            3,
+        ]
         min_time = match_times[int(len(match_times) * self.time_quantile)]
         max_time = match_times[int(len(match_times) * (1.0 - self.time_quantile)) - 1]
         # log("_calc_time_ranges: len(hits)={:d} id={:d} mode={:d} matches={:d} min={:d} max={:d}".format(
@@ -195,14 +201,14 @@ class Matcher(object):
 
     def _exact_match_counts(self, hits, ids, rawcounts, hashesfor=None):
         """Find the number of "filtered" (time-consistent) matching hashes
-            for each of the promising ids in <ids>.  Return an
-            np.array whose rows are [id, filtered_count,
-            modal_time_skew, unfiltered_count, original_rank,
-            min_time, max_time].  Results are sorted by original rank
-            (but will not in general include all the the original
-            IDs).  There can be multiple rows for a single ID, if
-            there are several distinct time_skews giving good
-            matches.
+        for each of the promising ids in <ids>.  Return an
+        np.array whose rows are [id, filtered_count,
+        modal_time_skew, unfiltered_count, original_rank,
+        min_time, max_time].  Results are sorted by original rank
+        (but will not in general include all the the original
+        IDs).  There can be multiple rows for a single ID, if
+        there are several distinct time_skews giving good
+        matches.
         """
         # Sort hits into time_in_original order - needed for _calc_time_range
         sorted_hits = hits[hits[:, 3].argsort()]
@@ -218,9 +224,11 @@ class Matcher(object):
         min_time = 0
         max_time = 0
         for urank, (id, rawcount) in enumerate(zip(ids, rawcounts)):
-            modes, counts = find_modes(alltimes[np.nonzero(allids == id)[0]],
-                                       window=self.window,
-                                       threshold=self.threshcount)
+            modes, counts = find_modes(
+                alltimes[np.nonzero(allids == id)[0]],
+                window=self.window,
+                threshold=self.threshcount,
+            )
             for mode in modes:
                 matchhashes = self._unique_match_hashes(id, sorted_hits, mode)
                 # Now we get the exact count
@@ -232,14 +240,22 @@ class Matcher(object):
                         results.resize((maxnresults, results.shape[1]))
                     if self.find_time_range:
                         min_time, max_time = self._calculate_time_ranges(
-                                sorted_hits, id, mode)
-                    results[nresults, :] = [id, filtcount, mode, rawcount,
-                                            urank, min_time, max_time]
+                            sorted_hits, id, mode
+                        )
+                    results[nresults, :] = [
+                        id,
+                        filtcount,
+                        mode,
+                        rawcount,
+                        urank,
+                        min_time,
+                        max_time,
+                    ]
                     nresults += 1
         return results[:nresults, :]
 
     def _approx_match_counts(self, hits, ids, rawcounts):
-        """ Quick and slightly inaccurate routine to count time-aligned hits.
+        """Quick and slightly inaccurate routine to count time-aligned hits.
 
         Only considers largest mode for reference ID match.
 
@@ -292,31 +308,40 @@ class Matcher(object):
                     # Too few - skip to the next id
                     still_looking = False
                     continue
-                count = np.sum(bincounts[max(0, mode - self.window):
-                                         (mode + self.window + 1)])
+                count = np.sum(
+                    bincounts[max(0, mode - self.window) : (mode + self.window + 1)]
+                )
                 if self.find_time_range:
                     min_time, max_time = self._calculate_time_ranges(
-                            sorted_hits, id, mode + mintime)
-                results[nresults, :] = [id, count, mode + mintime, rawcount,
-                                        urank, min_time, max_time]
+                        sorted_hits, id, mode + mintime
+                    )
+                results[nresults, :] = [
+                    id,
+                    count,
+                    mode + mintime,
+                    rawcount,
+                    urank,
+                    min_time,
+                    max_time,
+                ]
                 nresults += 1
                 if nresults >= results.shape[0]:
-                    results = np.vstack([results, np.zeros(results.shape,
-                                                           np.int32)])
+                    results = np.vstack([results, np.zeros(results.shape, np.int32)])
                 # Clear this hit to find next largest.
-                filtered_bincounts[max(0, mode - self.window):
-                                   (mode + self.window + 1)] = 0
+                filtered_bincounts[
+                    max(0, mode - self.window) : (mode + self.window + 1)
+                ] = 0
                 found_this_id += 1
                 if found_this_id > self.max_alignments_per_id:
                     still_looking = False
         return results[:nresults, :]
 
     def match_hashes(self, ht, hashes, hashesfor=None):
-        """ Match audio against fingerprint hash table.
-            Return top N matches as (id, filteredmatches, timoffs, rawmatches,
-            origrank, mintime, maxtime)
-            If hashesfor specified, return the actual matching hashes for that
-            hit (0=top hit).
+        """Match audio against fingerprint hash table.
+        Return top N matches as (id, filteredmatches, timoffs, rawmatches,
+        origrank, mintime, maxtime)
+        If hashesfor specified, return the actual matching hashes for that
+        hit (0=top hit).
         """
         # find the implicated id, time pairs from hash table
         # log("nhashes=%d" % np.shape(hashes)[0])
@@ -329,8 +354,7 @@ class Matcher(object):
         if not self.exact_count:
             results = self._approx_match_counts(hits, bestids, rawcounts)
         else:
-            results = self._exact_match_counts(hits, bestids, rawcounts,
-                                               hashesfor)
+            results = self._exact_match_counts(hits, bestids, rawcounts, hashesfor)
         # Sort results by filtered count, descending
         results = results[(-results[:, 1]).argsort(),]
         # Where was our best hit in the unfiltered count ranking?
@@ -352,10 +376,10 @@ class Matcher(object):
             return results, hashesforhashes
 
     def match_file(self, analyzer, ht, filename, number=None):
-        """ Read in an audio file, calculate its landmarks, query against
-            hash table.  Return top N matches as (id, filterdmatchcount,
-            timeoffs, rawmatchcount), also length of input file in sec,
-            and count of raw query hashes extracted
+        """Read in an audio file, calculate its landmarks, query against
+        hash table.  Return top N matches as (id, filterdmatchcount,
+        timeoffs, rawmatchcount), also length of input file in sec,
+        and count of raw query hashes extracted
         """
         q_hashes = analyzer.wavfile2hashes(filename)
         # Fake durations as largest hash time
@@ -368,23 +392,34 @@ class Matcher(object):
                 numberstring = "#%d" % number
             else:
                 numberstring = ""
-            print(time.ctime(), "Analyzed", numberstring, filename, "of",
-                  ('%.3f' % durd), "s "
-                                   "to", len(q_hashes), "hashes")
+            print(
+                time.ctime(),
+                "Analyzed",
+                numberstring,
+                filename,
+                "of",
+                ("%.3f" % durd),
+                "s " "to",
+                len(q_hashes),
+                "hashes",
+            )
         # Run query
         rslts = self.match_hashes(ht, q_hashes)
         # Post filtering
         if self.sort_by_time:
             rslts = rslts[(-rslts[:, 2]).argsort(), :]
-        return rslts[:self.max_returns, :], durd, len(q_hashes)
+        return rslts[: self.max_returns, :], durd, len(q_hashes)
+
+    def export_to_csv(self, matches, filename):
+        pass
 
     def file_match_to_msgs(self, analyzer, ht, qry, number=None):
-        """ Perform a match on a single input file, return list
-            of message strings """
+        """Perform a match on a single input file, return list
+        of message strings"""
         rslts, dur, nhash = self.match_file(analyzer, ht, qry, number)
         t_hop = analyzer.n_hop / analyzer.target_sr
         if self.verbose:
-            qrymsg = qry + (' %.1f ' % dur) + "sec " + str(nhash) + " raw hashes"
+            qrymsg = qry + (" %.1f " % dur) + "sec " + str(nhash) + " raw hashes"
         else:
             qrymsg = qry
 
@@ -397,37 +432,89 @@ class Matcher(object):
             else:
                 msgrslt.append(qrymsg + "\t")
         else:
-            for (tophitid, nhashaligned, aligntime, nhashraw, rank,
-                 min_time, max_time) in rslts:
+            for (
+                tophitid,
+                nhashaligned,
+                aligntime,
+                nhashraw,
+                rank,
+                min_time,
+                max_time,
+            ) in rslts:
                 # figure the number of raw and aligned matches for top hit
                 if self.verbose:
                     if self.find_time_range:
-                        msg = ("Matched {:6.1f} s starting at {:6.1f} s in {:s}"
-                               " to time {:6.1f} s in {:s}").format(
-                                (max_time - min_time) * t_hop, min_time * t_hop, qry,
-                                (min_time + aligntime) * t_hop, ht.names[tophitid])
+                        msg = (
+                            "Matched {:6.1f} s starting at {:6.1f} s in {:s}"
+                            " to time {:6.1f} s in {:s}"
+                        ).format(
+                            (max_time - min_time) * t_hop,
+                            min_time * t_hop,
+                            qry,
+                            (min_time + aligntime) * t_hop,
+                            ht.names[tophitid],
+                        )
                     else:
                         msg = "Matched {:s} as {:s} at {:6.1f} s".format(
-                                qrymsg, ht.names[tophitid], aligntime * t_hop)
-                    msg += (" with {:5d} of {:5d} common hashes"
-                            " at rank {:2d}").format(
-                            nhashaligned, nhashraw, rank)
+                            qrymsg, ht.names[tophitid], aligntime * t_hop
+                        )
+                    msg += (
+                        " with {:5d} of {:5d} common hashes" " at rank {:2d}"
+                    ).format(nhashaligned, nhashraw, rank)
                     msgrslt.append(msg)
                 else:
                     msgrslt.append(qrymsg + "\t" + ht.names[tophitid])
                 if self.illustrate:
                     self.illustrate_match(analyzer, ht, qry)
+
+            if self.report_folder is not None:
+                df = pd.DataFrame(
+                    rslts,
+                    columns=[
+                        "id",
+                        "nhashaligned",
+                        "aligntime",
+                        "nhashraw",
+                        "rank",
+                        "min_time",
+                        "max_time",
+                    ],
+                )
+
+                df["ts_begin"] = df["min_time"] * t_hop
+                df["ts_end"] = df["max_time"] * t_hop
+
+                def id_to_name(id):
+                    return ht.names[id]
+
+                df["title"] = df["id"].apply(id_to_name)
+                df["filename"] = qry
+
+                df = df[["title", "ts_begin", "ts_end"]]
+
+                df.to_csv(
+                    os.path.join(
+                        self.report_folder, qry.split("/")[-1].split(".")[0] + ".csv"
+                    ),
+                    index=False,
+                    header=True,
+                )
         return msgrslt
 
     def illustrate_match(self, analyzer, ht, filename):
-        """ Show the query fingerprints and the matching ones
-            plotted over a spectrogram """
+        """Show the query fingerprints and the matching ones
+        plotted over a spectrogram"""
         # Make the spectrogram
         # d, sr = librosa.load(filename, sr=analyzer.target_sr)
         d, sr = audio_read.audio_read(filename, sr=analyzer.target_sr, channels=1)
-        sgram = np.abs(stft.stft(d, n_fft=analyzer.n_fft,
-                                 hop_length=analyzer.n_hop,
-                                 window=np.hanning(analyzer.n_fft + 2)[1:-1]))
+        sgram = np.abs(
+            stft.stft(
+                d,
+                n_fft=analyzer.n_fft,
+                hop_length=analyzer.n_hop,
+                window=np.hanning(analyzer.n_fft + 2)[1:-1],
+            )
+        )
         sgram = 20.0 * np.log10(np.maximum(sgram, np.max(sgram) / 1e6))
         sgram = sgram - np.mean(sgram)
         # High-pass filter onset emphasis
@@ -435,13 +522,23 @@ class Matcher(object):
         # spectrogram enhancement
         if self.illustrate_hpf:
             HPF_POLE = 0.98
-            sgram = np.array([scipy.signal.lfilter([1, -1],
-                                                   [1, -HPF_POLE], s_row)
-                              for s_row in sgram])[:-1, ]
+            sgram = np.array(
+                [
+                    scipy.signal.lfilter([1, -1], [1, -HPF_POLE], s_row)
+                    for s_row in sgram
+                ]
+            )[:-1,]
         sgram = sgram - np.max(sgram)
-        librosa.display.specshow(sgram, sr=sr, hop_length=analyzer.n_hop,
-                                 y_axis='linear', x_axis='time',
-                                 cmap='gray_r', vmin=-80.0, vmax=0)
+        librosa.display.specshow(
+            sgram,
+            sr=sr,
+            hop_length=analyzer.n_hop,
+            y_axis="linear",
+            x_axis="time",
+            cmap="gray_r",
+            vmin=-80.0,
+            vmax=0,
+        )
         # Do the match?
         q_hashes = analyzer.wavfile2hashes(filename)
         # Run query, get back the hashes for match zero
@@ -453,17 +550,24 @@ class Matcher(object):
         mlms = audfprint_analyze.hashes2landmarks(matchhashes)
         # Overplot on the spectrogram
         time_scale = analyzer.n_hop / float(sr)
-        freq_scale = float(sr)/analyzer.n_fft
-        plt.plot(time_scale * np.array([[x[0], x[0] + x[3]] for x in lms]).T,
-                 freq_scale * np.array([[x[1], x[2]] for x in lms]).T,
-                 '.-g')
-        plt.plot(time_scale * np.array([[x[0], x[0] + x[3]] for x in mlms]).T,
-                 freq_scale * np.array([[x[1], x[2]] for x in mlms]).T,
-                 '.-r')
+        freq_scale = float(sr) / analyzer.n_fft
+        plt.plot(
+            time_scale * np.array([[x[0], x[0] + x[3]] for x in lms]).T,
+            freq_scale * np.array([[x[1], x[2]] for x in lms]).T,
+            ".-g",
+        )
+        plt.plot(
+            time_scale * np.array([[x[0], x[0] + x[3]] for x in mlms]).T,
+            freq_scale * np.array([[x[1], x[2]] for x in mlms]).T,
+            ".-r",
+        )
         # Add title
-        plt.title(filename + " : Matched as " + ht.names[results[0][0]]
-                  + (" with %d of %d hashes" % (len(matchhashes),
-                                                len(q_hashes))))
+        plt.title(
+            filename
+            + " : Matched as "
+            + ht.names[results[0][0]]
+            + (" with %d of %d hashes" % (len(matchhashes), len(q_hashes)))
+        )
         # Display
         plt.show()
         # Return
@@ -472,17 +576,32 @@ class Matcher(object):
 
 def localtest():
     """Function to provide quick test"""
-    pat = '/Users/dpwe/projects/shazam/Nine_Lives/*mp3'
-    qry = 'query.mp3'
+    pat = "/Users/dpwe/projects/shazam/Nine_Lives/*mp3"
+    qry = "query.mp3"
     hash_tab = audfprint_analyze.glob2hashtable(pat)
     matcher = Matcher()
-    rslts, dur, nhash = matcher.match_file(audfprint_analyze.g2h_analyzer,
-                                           hash_tab, qry)
+    rslts, dur, nhash = matcher.match_file(
+        audfprint_analyze.g2h_analyzer, hash_tab, qry
+    )
     t_hop = 0.02322
-    print("Matched", qry, "(", dur, "s,", nhash, "hashes)",
-          "as", hash_tab.names[rslts[0][0]],
-          "at", t_hop * float(rslts[0][2]), "with", rslts[0][1],
-          "of", rslts[0][3], "hashes")
+    print(
+        "Matched",
+        qry,
+        "(",
+        dur,
+        "s,",
+        nhash,
+        "hashes)",
+        "as",
+        hash_tab.names[rslts[0][0]],
+        "at",
+        t_hop * float(rslts[0][2]),
+        "with",
+        rslts[0][1],
+        "of",
+        rslts[0][3],
+        "hashes",
+    )
 
 
 # Run the main function if called from the command line
